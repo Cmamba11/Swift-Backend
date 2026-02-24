@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "ts-node-esm server.ts",
-     "build": "tsc",
+     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "db:push": "npx prisma db push",
     "db:generate": "npx prisma generate",

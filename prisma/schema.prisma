@@ -1,0 +1,276 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum PartnerType {
+  NEW
+  EXISTING
+  TARGETED
+}
+
+enum VisitOutcome {
+  INTERESTED
+  NOT_INTERESTED
+  FOLLOW_UP
+  ORDER_PLACED
+}
+
+enum ProductType {
+  ROLLER
+  PACKING_BAG
+}
+
+enum OrderStatus {
+  PENDING
+  AWAITING_PROD
+  IN_PROD
+  READY_FOR_DISPATCH
+  CLOSED
+  CANCELLED
+  PARTIALLY_SETTLED
+}
+
+enum WorkOrderStatus {
+  PENDING
+  IN_PROD
+  COMPLETED
+}
+
+enum WorkOrderPriority {
+  CRITICAL
+  HIGH
+  NORMAL
+}
+
+model Role {
+  id            String  @id @default(uuid())
+  name          String  @unique
+  description   String  @default("")
+  isSystemAdmin Boolean @default(false)
+
+  canViewPartners   Boolean @default(false)
+  canCreatePartners Boolean @default(false)
+  canEditPartners   Boolean @default(false)
+  canDeletePartners Boolean @default(false)
+
+  canViewAgents   Boolean @default(false)
+  canCreateAgents Boolean @default(false)
+  canEditAgents   Boolean @default(false)
+  canDeleteAgents Boolean @default(false)
+
+  canViewOrders              Boolean @default(false)
+  canCreateOrders            Boolean @default(false)
+  canEditOrders              Boolean @default(false)
+  canDeleteOrders            Boolean @default(false)
+  canVerifyOrders            Boolean @default(false)
+  canApproveAsAgentHead      Boolean @default(false)
+  canApproveAsAccountOfficer Boolean @default(false)
+
+  canViewInventory   Boolean @default(false)
+  canCreateInventory Boolean @default(false)
+  canEditInventory   Boolean @default(false)
+  canDeleteInventory Boolean @default(false)
+
+  canViewWorkOrders   Boolean @default(false)
+  canManageWorkOrders Boolean @default(false)
+  canDeleteWorkOrders Boolean @default(false)
+
+  canViewCalls   Boolean @default(false)
+  canCreateCalls Boolean @default(false)
+  canEditCalls   Boolean @default(false)
+  canDeleteCalls Boolean @default(false)
+
+  canViewLogistics   Boolean @default(false)
+  canManageLogistics Boolean @default(false)
+
+  canViewSecurity      Boolean @default(false)
+  canManageUsers       Boolean @default(false)
+  canManageRoles       Boolean @default(false)
+  canAccessAIArchitect Boolean @default(false)
+
+  users User[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model User {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  name      String
+  roleId    String
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  lastLogin DateTime?
+  agentId   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([roleId])
+  @@index([agentId])
+}
+
+model Partner {
+  id               String      @id @default(uuid())
+  customerId       String?
+  name             String
+  type             PartnerType @default(NEW)
+  email            String      @default("")
+  phone            String      @default("")
+  contactPerson    String      @default("")
+  location         String      @default("")
+  address          String      @default("")
+  assignedAgentId  String      @default("")
+  status           String      @default("ACTIVE")
+  businessCategory String      @default("")
+  website          String?
+  defaultRatePerKg Float?
+  micron           String      @default("")
+  colors           String[]    @default([])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Agent {
+  id                String  @id @default(uuid())
+  name              String
+  email             String  @default("")
+  phone             String  @default("")
+  region            String  @default("")
+  role              String  @default("")
+  performanceScore  Float   @default(0)
+  customersAcquired Int     @default(0)
+  employeeId        String  @default("")
+  hireDate          DateTime?
+  emergencyContact  String  @default("")
+  commissionRate    Float   @default(0)
+  dataAccuracyScore Float   @default(100)
+  timelinessScore   Float   @default(100)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Order {
+  id                               String       @id @default(uuid())
+  partnerId                        String?
+  guestCompanyName                 String?
+  importerName                     String?
+  orderDate                        DateTime     @default(now())
+  status                           OrderStatus  @default(PENDING)
+  totalValue                       Float        @default(0)
+  internalId                       String       @unique
+  adminApproved                    Boolean      @default(false)
+  agentHeadApproved                Boolean      @default(false)
+  accountOfficerApproved           Boolean      @default(false)
+  proofOfPayment                   String?
+  settlementAdminApproved          Boolean      @default(false)
+  settlementAgentHeadApproved      Boolean      @default(false)
+  settlementAccountOfficerApproved Boolean      @default(false)
+  finalWeight                      Float?
+  finalUnits                       Float?
+  settlementNotes                  String?
+
+  items      OrderItem[]
+  workOrders WorkOrder[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([partnerId])
+  @@index([orderDate])
+}
+
+model OrderItem {
+  id                String      @id @default(uuid())
+  orderId           String
+  productName       String
+  productType       ProductType @default(ROLLER)
+  quantity          Int
+  totalKg           Float?
+  ratePerKg         Float?
+  fulfilledQuantity Int        @default(0)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
+}
+
+model WorkOrder {
+  id         String            @id @default(uuid())
+  internalId String            @unique
+  orderId    String
+  status     WorkOrderStatus   @default(PENDING)
+  priority   WorkOrderPriority @default(NORMAL)
+  startDate  DateTime?
+  notes      String?
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
+}
+
+model Sale {
+  id              String      @id @default(uuid())
+  orderId         String
+  agentId         String
+  partnerId       String
+  inventoryItemId String      @default("")
+  productName     String
+  productType     ProductType @default(ROLLER)
+  totalKg         Float       @default(0)
+  volume          Float       @default(0)
+  unitPrice       Float       @default(0)
+  date            DateTime    @default(now())
+  notes           String      @default("")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([agentId])
+  @@index([partnerId])
+  @@index([date])
+}
+
+model CallReport {
+  id         String       @id @default(uuid())
+  customerId String
+  agentId    String
+  date       DateTime     @default(now())
+  duration   Int          @default(0)
+  outcome    VisitOutcome @default(FOLLOW_UP)
+  summary    String       @default("")
+  notes      String       @default("")
+  orderId    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([customerId])
+  @@index([agentId])
+  @@index([date])
+}
+
+model SystemConfig {
+  id                         String   @id @default("default")
+  recommendedCommissionRate  Float    @default(10.0)
+  targetEfficiencyMetric     String   @default("Lead Conversion")
+  customerSegmentationAdvice String[] @default(["SMB", "Enterprise"])
+  logisticsThreshold         Int      @default(50)
+  lastUpdated                DateTime @default(now())
+  projectedImpact            String?
+
+  updatedAt DateTime @updatedAt
+}

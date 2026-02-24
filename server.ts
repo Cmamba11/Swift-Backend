@@ -63,7 +63,7 @@ const app = express();
 
 app.use(
   cors({
-    origin: true,
+    origin: ['https://swiftplasticsinc.com', 'https://www.swiftplasticsinc.com'],
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],

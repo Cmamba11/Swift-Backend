@@ -96,6 +96,10 @@ const app = express();
 app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
 
+
+// 👇 ADD THIS LINE HERE
+app.get('/api/health', (req, res) => res.json({ status: 'ONLINE', timestamp: new Date().toISOString() }));
+
 // Auth
 app.post('/api/auth/login', async (req, res) => {
   const { username } = req.body;

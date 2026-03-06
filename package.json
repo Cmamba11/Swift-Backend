@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-   "seed": "ts-node prisma/seed.ts",
+    "seed": "ts-node prisma/seed.ts",
     "dev": "ts-node-esm server.ts",
-     "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "db:push": "npx prisma db push",
     "db:generate": "npx prisma generate",
@@ -31,7 +31,9 @@
     "@types/node": "^20.12.7",
     "@types/pg": "^8.11.5",
     "ts-node": "^10.9.2",
-    "typescript": "^5.4.5"
+    "tsx": "^4.21.0",
+    "typescript": "^5.4.5",
+    "vite": "^7.3.1"
   },
   "engines": {
     "node": "20.x"

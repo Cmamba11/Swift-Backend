@@ -164,10 +164,9 @@ async function start() {
     await persistRuntimeChanges();
   }
 
-  const PORT = process.env.PORT || 3001;
+  const PORT = Number(process.env.PORT || 3001); 
+
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`📡 [SWIFT ENGINE] Backend active on port ${PORT}`);
   });
-}
-
 start().catch(err => console.error("❌ Boot Error", err));

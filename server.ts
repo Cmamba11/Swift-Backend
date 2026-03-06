@@ -1,12 +1,6 @@
-/**
- * SWIFT PLASTICS - BACKEND ENGINE (Full Unified Version)
- * Includes: Auth, Partners, Roles, State Persistence, and Prisma Mirroring.
- */
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'crypto';
 import express from 'express';
 import cors from 'cors';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { Pool } from 'pg';
 // @ts-ignore
 import { PrismaClient } from '@prisma/client';
@@ -15,10 +9,6 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// --- 1. TYPES & STATE ---
 type Dict = Record<string, any>;
 type ApiState = {
   partners: Dict[]; agents: Dict[]; calls: Dict[]; orders: Dict[];
@@ -33,7 +23,6 @@ const state: ApiState = {
   config: { recommendedCommissionRate: 10, lastUpdated: new Date().toISOString() },
 };
 
-// --- 2. DATABASE INIT ---
 let prisma: PrismaClient | null = null;
 let pgPool: Pool | null = null;
 
@@ -43,11 +32,11 @@ try {
     pgPool = new Pool({ connectionString });
     const adapter = new PrismaPg(pgPool);
     prisma = new PrismaClient({ adapter });
+    console.log("✅ Prisma Client Initialized");
   }
 } catch (err) { console.error("❌ Database Init Error", err); }
 
-// --- 3. HELPER FUNCTIONS ---
-
+// --- HELPERS ---
 const nowIso = () => new Date().toISOString();
 
 function normalizePartner(input: Dict): Dict {
@@ -65,19 +54,6 @@ function normalizePartner(input: Dict): Dict {
   };
 }
 
-function normalizeRole(input: Dict): Dict {
-  return {
-    id: input.id ?? randomUUID(),
-    name: input.name ?? 'Untitled Role',
-    description: input.description ?? '',
-    isSystemAdmin: Boolean(input.isSystemAdmin ?? false),
-    canViewPartners: Boolean(input.canViewPartners ?? false),
-    canEditPartners: Boolean(input.canEditPartners ?? false),
-    canManageRoles: Boolean(input.canManageRoles ?? false),
-    ...input
-  };
-}
-
 async function persistRuntimeChanges() {
   if (!pgPool) return;
   try {
@@ -86,21 +62,31 @@ async function persistRuntimeChanges() {
        ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
       [STATE_ROW_ID, JSON.stringify(state)]
     );
-  } catch (err: any) {
-    console.error('❌ [STATE] Persistence failed:', err.message);
-  }
+    console.log("💾 [STATE] Changes persisted to swift_runtime_state");
+  } catch (err: any) { console.error('❌ [STATE] Persistence failed:', err.message); }
 }
 
-// --- 4. API ROUTES ---
+// --- API ROUTES ---
 const app = express();
 app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
 
+app.get('/api/health', (req, res) => res.json({ status: 'ONLINE', timestamp: nowIso(), dataCounts: {
+  partners: state.partners.length,
+  orders: state.orders.length,
+  agents: state.agents.length
+}}));
 
-// 👇 ADD THIS LINE HERE
-app.get('/api/health', (req, res) => res.json({ status: 'ONLINE', timestamp: new Date().toISOString() }));
+// --- DATA ROUTES (Partners, Agents, etc.) ---
+app.get('/api/partners', (req, res) => res.json(state.partners));
+app.get('/api/agents', (req, res) => res.json(state.agents));
+app.get('/api/orders', (req, res) => res.json(state.orders));
+app.get('/api/calls', (req, res) => res.json(state.calls));
+app.get('/api/sales', (req, res) => res.json(state.sales));
+app.get('/api/users', (req, res) => res.json(state.users));
+app.get('/api/roles', (req, res) => res.json(state.roles));
 
-// Auth
+// --- AUTH ---
 app.post('/api/auth/login', async (req, res) => {
   const { username } = req.body;
   const user = state.users.find(u => u.username === username);
@@ -108,58 +94,69 @@ app.post('/api/auth/login', async (req, res) => {
   else res.status(401).json({ ok: false, error: "Invalid credentials" });
 });
 
-app.get('/api/auth/me', (req, res) => res.json({ ok: true, status: "online" }));
+// --- HYDRATION LOGIC ---
+async function hydrateFromPrisma() {
+  if (!prisma) {
+    console.error("❌ Cannot hydrate: Prisma not connected");
+    return;
+  }
+  
+  console.log("🌱 [HYDRATE] Pulling all data from Neon/Prisma tables...");
+  
+  try {
+    // Partners
+    const p = await (prisma as any).partner.findMany();
+    state.partners = p.map((item: any) => normalizePartner(item));
+    console.log(`✅ Loaded ${state.partners.length} partners`);
 
-// Partners
-app.get('/api/partners', (req, res) => res.json(state.partners));
-app.post('/api/partners', async (req, res) => {
-  const partner = normalizePartner(req.body);
-  state.partners.push(partner);
-  await persistRuntimeChanges();
-  res.json(partner);
-});
-app.patch('/api/partners/:id', async (req, res) => {
-  const idx = state.partners.findIndex(p => p.id === req.params.id);
-  if (idx !== -1) {
-    state.partners[idx] = { ...state.partners[idx], ...req.body };
+    // Agents
+    state.agents = await (prisma as any).agent.findMany();
+    console.log(`✅ Loaded ${state.agents.length} agents`);
+
+    // Orders
+    state.orders = await (prisma as any).order.findMany();
+    console.log(`✅ Loaded ${state.orders.length} orders`);
+
+    // Roles
+    state.roles = await (prisma as any).role.findMany();
+    console.log(`✅ Loaded ${state.roles.length} roles`);
+
+    // Users
+    state.users = await (prisma as any).user.findMany();
+    console.log(`✅ Loaded ${state.users.length} users`);
+
+    // Calls
+    state.calls = await (prisma as any).callReport.findMany();
+    console.log(`✅ Loaded ${state.calls.length} calls`);
+
     await persistRuntimeChanges();
-    res.json(state.partners[idx]);
-  } else res.status(404).json({ error: "Partner not found" });
-});
+  } catch (err: any) {
+    console.error("❌ [HYDRATE] Error during data pull:", err.message);
+  }
+}
 
-// Roles
-app.get('/api/roles', (req, res) => res.json(state.roles));
-app.patch('/api/roles/:id', async (req, res) => {
-  const idx = state.roles.findIndex(r => r.id === req.params.id);
-  if (idx !== -1) {
-    state.roles[idx] = { ...state.roles[idx], ...req.body };
-    await persistRuntimeChanges();
-    res.json(state.roles[idx]);
-  } else res.status(404).json({ error: "Role not found" });
-});
-
-// Other Data Routes
-app.get('/api/agents', (req, res) => res.json(state.agents));
-app.get('/api/calls', (req, res) => res.json(state.calls));
-app.get('/api/orders', (req, res) => res.json(state.orders));
-app.get('/api/sales', (req, res) => res.json(state.sales));
-app.get('/api/users', (req, res) => res.json(state.users));
-app.get('/api/work-orders', (req, res) => res.json(state.workOrders));
-app.get('/api/config', (req, res) => res.json(state.config));
-
-// --- 5. SEEDER & START ---
+// --- STARTUP ---
 async function start() {
   if (pgPool) {
     await pgPool.query(`CREATE TABLE IF NOT EXISTS swift_runtime_state (id TEXT PRIMARY KEY, data JSONB, updated_at TIMESTAMPTZ)`);
     const result = await pgPool.query(`SELECT data FROM swift_runtime_state WHERE id = $1`, [STATE_ROW_ID]);
-    if (result.rows[0]) Object.assign(state, result.rows[0].data);
+    
+    // If the state table is empty OR has no partners, try to hydrate from Prisma
+    const hasData = result.rows[0]?.data?.partners?.length > 0;
+    
+    if (hasData) {
+      console.log("📦 [STATE] Loading existing state from swift_runtime_state");
+      Object.assign(state, result.rows[0].data);
+    } else {
+      await hydrateFromPrisma();
+    }
   }
 
-  // Seed Admin if empty
+  // Final check for Admin
   if (state.roles.length === 0) {
-    const adminRole = normalizeRole({ name: 'System Administrator', isSystemAdmin: true, canEditPartners: true, canManageRoles: true });
+    const adminRole = { id: randomUUID(), name: 'System Administrator', isSystemAdmin: true };
     state.roles.push(adminRole);
-    state.users.push({ id: randomUUID(), username: 'admin', name: 'Chief Administrator', roleId: adminRole.id });
+    state.users.push({ id: randomUUID(), username: 'admin', name: 'Admin', roleId: adminRole.id });
     await persistRuntimeChanges();
   }
 

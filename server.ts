@@ -17,6 +17,7 @@ type ApiState = {
 };
 
 const STATE_ROW_ID = 'main';
+// Initialize with empty arrays to prevent .map() crashes
 const state: ApiState = {
   partners: [], agents: [], calls: [], orders: [],
   sales: [], users: [], roles: [], workOrders: [],
@@ -60,6 +61,18 @@ function normalizePartner(input: Dict): Dict {
   };
 }
 
+// Ensures every order has an items array so the frontend doesn't crash
+function normalizeOrder(input: Dict): Dict {
+  return {
+    id: input.id ?? randomUUID(),
+    items: Array.isArray(input.items) ? input.items : [],
+    status: input.status ?? 'PENDING',
+    orderDate: input.orderDate ?? nowIso(),
+    totalValue: Number(input.totalValue ?? 0),
+    ...input
+  };
+}
+
 async function persistRuntimeChanges() {
   if (!pgPool) return;
   try {
@@ -77,7 +90,6 @@ const app = express();
 app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
 
-// Health Check
 app.get('/api/health', (req, res) => res.json({ status: 'ONLINE', timestamp: nowIso() }));
 
 // Config
@@ -95,14 +107,6 @@ app.post('/api/partners', async (req, res) => {
   state.partners.push(partner);
   await persistRuntimeChanges();
   res.json(partner);
-});
-app.patch('/api/partners/:id', async (req, res) => {
-  const idx = state.partners.findIndex(p => p.id === req.params.id);
-  if (idx !== -1) {
-    state.partners[idx] = { ...state.partners[idx], ...req.body };
-    await persistRuntimeChanges();
-    res.json(state.partners[idx]);
-  } else res.status(404).json({ error: "Partner not found" });
 });
 
 // Data Routes (Safety: Always return an array)
@@ -122,12 +126,7 @@ app.post('/api/auth/login', async (req, res) => {
   else res.status(401).json({ ok: false, error: "Invalid credentials" });
 });
 
-// Fix: Added missing /auth/me route
-app.get('/api/auth/me', (req, res) => {
-  // In this simple setup, we return a generic success if the API is reachable
-  // The frontend uses this to check if the session is still valid
-  res.json({ ok: true, status: "online" });
-});
+app.get('/api/auth/me', (req, res) => res.json({ ok: true, status: "online" }));
 
 // --- HYDRATION ---
 async function hydrateFromPrisma() {
@@ -137,7 +136,7 @@ async function hydrateFromPrisma() {
     const [p, a, o, r, u, c, wo, s] = await Promise.all([
       (prisma as any).partner.findMany(),
       (prisma as any).agent.findMany(),
-      (prisma as any).order.findMany(),
+      (prisma as any).order.findMany({ include: { items: true } }), // CRITICAL: Include items
       (prisma as any).role.findMany(),
       (prisma as any).user.findMany(),
       (prisma as any).callReport.findMany(),
@@ -145,9 +144,9 @@ async function hydrateFromPrisma() {
       (prisma as any).sale.findMany()
     ]);
     
-    state.partners = p.map((item: any) => normalizePartner(item));
+    state.partners = (p || []).map((item: any) => normalizePartner(item));
     state.agents = a || [];
-    state.orders = o || [];
+    state.orders = (o || []).map((item: any) => normalizeOrder(item));
     state.roles = r || [];
     state.users = u || [];
     state.calls = c || [];
@@ -155,7 +154,7 @@ async function hydrateFromPrisma() {
     state.sales = s || [];
     
     await persistRuntimeChanges();
-    console.log(`✅ Hydration Complete: ${state.partners.length} partners, ${state.sales.length} sales, ${state.workOrders.length} work orders loaded.`);
+    console.log(`✅ Hydration Complete: ${state.orders.length} orders loaded with items.`);
   } catch (err: any) { console.error("❌ Hydration Error:", err.message); }
 }
 
@@ -165,9 +164,19 @@ async function start() {
     await pgPool.query(`CREATE TABLE IF NOT EXISTS swift_runtime_state (id TEXT PRIMARY KEY, data JSONB, updated_at TIMESTAMPTZ)`);
     const result = await pgPool.query(`SELECT data FROM swift_runtime_state WHERE id = $1`, [STATE_ROW_ID]);
     
-    if (result.rows[0]?.data?.partners?.length > 0) {
+    if (result.rows[0]?.data) {
       console.log("📦 [STATE] Loading existing state from swift_runtime_state");
-      Object.assign(state, result.rows[0].data);
+      const savedData = result.rows[0].data;
+      // Merge saved data with defaults to ensure no missing keys
+      state.partners = savedData.partners || [];
+      state.agents = savedData.agents || [];
+      state.orders = (savedData.orders || []).map((o: any) => normalizeOrder(o));
+      state.sales = savedData.sales || [];
+      state.users = savedData.users || [];
+      state.roles = savedData.roles || [];
+      state.workOrders = savedData.workOrders || [];
+      state.calls = savedData.calls || [];
+      if (savedData.config) state.config = savedData.config;
     } else {
       await hydrateFromPrisma();
     }

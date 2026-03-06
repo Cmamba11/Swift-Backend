@@ -81,7 +81,7 @@ app.use(express.json());
 app.get('/api/health', (req, res) => res.json({ status: 'ONLINE', timestamp: nowIso() }));
 
 // Config
-app.get('/api/config', (req, res) => res.json(state.config));
+app.get('/api/config', (req, res) => res.json(state.config || {}));
 app.patch('/api/config', async (req, res) => {
   state.config = { ...state.config, ...req.body, lastUpdated: nowIso() };
   await persistRuntimeChanges();
@@ -89,7 +89,7 @@ app.patch('/api/config', async (req, res) => {
 });
 
 // Partners
-app.get('/api/partners', (req, res) => res.json(state.partners));
+app.get('/api/partners', (req, res) => res.json(state.partners || []));
 app.post('/api/partners', async (req, res) => {
   const partner = normalizePartner(req.body);
   state.partners.push(partner);
@@ -105,14 +105,14 @@ app.patch('/api/partners/:id', async (req, res) => {
   } else res.status(404).json({ error: "Partner not found" });
 });
 
-// Data Routes
-app.get('/api/agents', (req, res) => res.json(state.agents));
-app.get('/api/orders', (req, res) => res.json(state.orders));
-app.get('/api/calls', (req, res) => res.json(state.calls));
-app.get('/api/sales', (req, res) => res.json(state.sales));
-app.get('/api/users', (req, res) => res.json(state.users));
-app.get('/api/roles', (req, res) => res.json(state.roles));
-app.get('/api/work-orders', (req, res) => res.json(state.workOrders));
+// Data Routes (Safety: Always return an array)
+app.get('/api/agents', (req, res) => res.json(state.agents || []));
+app.get('/api/orders', (req, res) => res.json(state.orders || []));
+app.get('/api/calls', (req, res) => res.json(state.calls || []));
+app.get('/api/sales', (req, res) => res.json(state.sales || []));
+app.get('/api/users', (req, res) => res.json(state.users || []));
+app.get('/api/roles', (req, res) => res.json(state.roles || []));
+app.get('/api/work-orders', (req, res) => res.json(state.workOrders || []));
 
 // Auth
 app.post('/api/auth/login', async (req, res) => {
@@ -122,10 +122,17 @@ app.post('/api/auth/login', async (req, res) => {
   else res.status(401).json({ ok: false, error: "Invalid credentials" });
 });
 
+// Fix: Added missing /auth/me route
+app.get('/api/auth/me', (req, res) => {
+  // In this simple setup, we return a generic success if the API is reachable
+  // The frontend uses this to check if the session is still valid
+  res.json({ ok: true, status: "online" });
+});
+
 // --- HYDRATION ---
 async function hydrateFromPrisma() {
   if (!prisma) return;
-  console.log("🌱 [HYDRATE] Pulling data from Neon (including Sales & Work Orders)...");
+  console.log("🌱 [HYDRATE] Pulling data from Neon...");
   try {
     const [p, a, o, r, u, c, wo, s] = await Promise.all([
       (prisma as any).partner.findMany(),
@@ -135,20 +142,20 @@ async function hydrateFromPrisma() {
       (prisma as any).user.findMany(),
       (prisma as any).callReport.findMany(),
       (prisma as any).workOrder.findMany(),
-      (prisma as any).sale.findMany() // Added Sales hydration
+      (prisma as any).sale.findMany()
     ]);
     
     state.partners = p.map((item: any) => normalizePartner(item));
-    state.agents = a;
-    state.orders = o;
-    state.roles = r;
-    state.users = u;
-    state.calls = c;
-    state.workOrders = wo;
-    state.sales = s; // Sync Sales to state
+    state.agents = a || [];
+    state.orders = o || [];
+    state.roles = r || [];
+    state.users = u || [];
+    state.calls = c || [];
+    state.workOrders = wo || [];
+    state.sales = s || [];
     
     await persistRuntimeChanges();
-    console.log(`✅ Hydration Complete: ${state.sales.length} sales and ${state.workOrders.length} work orders loaded.`);
+    console.log(`✅ Hydration Complete: ${state.partners.length} partners, ${state.sales.length} sales, ${state.workOrders.length} work orders loaded.`);
   } catch (err: any) { console.error("❌ Hydration Error:", err.message); }
 }
 
@@ -158,7 +165,6 @@ async function start() {
     await pgPool.query(`CREATE TABLE IF NOT EXISTS swift_runtime_state (id TEXT PRIMARY KEY, data JSONB, updated_at TIMESTAMPTZ)`);
     const result = await pgPool.query(`SELECT data FROM swift_runtime_state WHERE id = $1`, [STATE_ROW_ID]);
     
-    // If the state table is empty OR has no partners, try to hydrate from Prisma
     if (result.rows[0]?.data?.partners?.length > 0) {
       console.log("📦 [STATE] Loading existing state from swift_runtime_state");
       Object.assign(state, result.rows[0].data);

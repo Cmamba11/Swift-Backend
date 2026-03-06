@@ -20,7 +20,13 @@ const STATE_ROW_ID = 'main';
 const state: ApiState = {
   partners: [], agents: [], calls: [], orders: [],
   sales: [], users: [], roles: [], workOrders: [],
-  config: { recommendedCommissionRate: 10, lastUpdated: new Date().toISOString() },
+  config: { 
+    recommendedCommissionRate: 10, 
+    targetEfficiencyMetric: 'Lead Conversion',
+    customerSegmentationAdvice: ['SMB', 'Enterprise'],
+    logisticsThreshold: 50,
+    lastUpdated: new Date().toISOString() 
+  },
 };
 
 let prisma: PrismaClient | null = null;
@@ -62,7 +68,7 @@ async function persistRuntimeChanges() {
        ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
       [STATE_ROW_ID, JSON.stringify(state)]
     );
-    console.log("💾 [STATE] Changes persisted to swift_runtime_state");
+    console.log("💾 [STATE] Changes persisted");
   } catch (err: any) { console.error('❌ [STATE] Persistence failed:', err.message); }
 }
 
@@ -71,22 +77,44 @@ const app = express();
 app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
 
-app.get('/api/health', (req, res) => res.json({ status: 'ONLINE', timestamp: nowIso(), dataCounts: {
-  partners: state.partners.length,
-  orders: state.orders.length,
-  agents: state.agents.length
-}}));
+// Health Check
+app.get('/api/health', (req, res) => res.json({ status: 'ONLINE', timestamp: nowIso() }));
 
-// --- DATA ROUTES (Partners, Agents, etc.) ---
+// Config
+app.get('/api/config', (req, res) => res.json(state.config));
+app.patch('/api/config', async (req, res) => {
+  state.config = { ...state.config, ...req.body, lastUpdated: nowIso() };
+  await persistRuntimeChanges();
+  res.json(state.config);
+});
+
+// Partners
 app.get('/api/partners', (req, res) => res.json(state.partners));
+app.post('/api/partners', async (req, res) => {
+  const partner = normalizePartner(req.body);
+  state.partners.push(partner);
+  await persistRuntimeChanges();
+  res.json(partner);
+});
+app.patch('/api/partners/:id', async (req, res) => {
+  const idx = state.partners.findIndex(p => p.id === req.params.id);
+  if (idx !== -1) {
+    state.partners[idx] = { ...state.partners[idx], ...req.body };
+    await persistRuntimeChanges();
+    res.json(state.partners[idx]);
+  } else res.status(404).json({ error: "Partner not found" });
+});
+
+// Data Routes
 app.get('/api/agents', (req, res) => res.json(state.agents));
 app.get('/api/orders', (req, res) => res.json(state.orders));
 app.get('/api/calls', (req, res) => res.json(state.calls));
 app.get('/api/sales', (req, res) => res.json(state.sales));
 app.get('/api/users', (req, res) => res.json(state.users));
 app.get('/api/roles', (req, res) => res.json(state.roles));
+app.get('/api/work-orders', (req, res) => res.json(state.workOrders));
 
-// --- AUTH ---
+// Auth
 app.post('/api/auth/login', async (req, res) => {
   const { username } = req.body;
   const user = state.users.find(u => u.username === username);
@@ -94,45 +122,34 @@ app.post('/api/auth/login', async (req, res) => {
   else res.status(401).json({ ok: false, error: "Invalid credentials" });
 });
 
-// --- HYDRATION LOGIC ---
+// --- HYDRATION ---
 async function hydrateFromPrisma() {
-  if (!prisma) {
-    console.error("❌ Cannot hydrate: Prisma not connected");
-    return;
-  }
-  
-  console.log("🌱 [HYDRATE] Pulling all data from Neon/Prisma tables...");
-  
+  if (!prisma) return;
+  console.log("🌱 [HYDRATE] Pulling data from Neon (including Sales & Work Orders)...");
   try {
-    // Partners
-    const p = await (prisma as any).partner.findMany();
+    const [p, a, o, r, u, c, wo, s] = await Promise.all([
+      (prisma as any).partner.findMany(),
+      (prisma as any).agent.findMany(),
+      (prisma as any).order.findMany(),
+      (prisma as any).role.findMany(),
+      (prisma as any).user.findMany(),
+      (prisma as any).callReport.findMany(),
+      (prisma as any).workOrder.findMany(),
+      (prisma as any).sale.findMany() // Added Sales hydration
+    ]);
+    
     state.partners = p.map((item: any) => normalizePartner(item));
-    console.log(`✅ Loaded ${state.partners.length} partners`);
-
-    // Agents
-    state.agents = await (prisma as any).agent.findMany();
-    console.log(`✅ Loaded ${state.agents.length} agents`);
-
-    // Orders
-    state.orders = await (prisma as any).order.findMany();
-    console.log(`✅ Loaded ${state.orders.length} orders`);
-
-    // Roles
-    state.roles = await (prisma as any).role.findMany();
-    console.log(`✅ Loaded ${state.roles.length} roles`);
-
-    // Users
-    state.users = await (prisma as any).user.findMany();
-    console.log(`✅ Loaded ${state.users.length} users`);
-
-    // Calls
-    state.calls = await (prisma as any).callReport.findMany();
-    console.log(`✅ Loaded ${state.calls.length} calls`);
-
+    state.agents = a;
+    state.orders = o;
+    state.roles = r;
+    state.users = u;
+    state.calls = c;
+    state.workOrders = wo;
+    state.sales = s; // Sync Sales to state
+    
     await persistRuntimeChanges();
-  } catch (err: any) {
-    console.error("❌ [HYDRATE] Error during data pull:", err.message);
-  }
+    console.log(`✅ Hydration Complete: ${state.sales.length} sales and ${state.workOrders.length} work orders loaded.`);
+  } catch (err: any) { console.error("❌ Hydration Error:", err.message); }
 }
 
 // --- STARTUP ---
@@ -142,9 +159,7 @@ async function start() {
     const result = await pgPool.query(`SELECT data FROM swift_runtime_state WHERE id = $1`, [STATE_ROW_ID]);
     
     // If the state table is empty OR has no partners, try to hydrate from Prisma
-    const hasData = result.rows[0]?.data?.partners?.length > 0;
-    
-    if (hasData) {
+    if (result.rows[0]?.data?.partners?.length > 0) {
       console.log("📦 [STATE] Loading existing state from swift_runtime_state");
       Object.assign(state, result.rows[0].data);
     } else {
@@ -152,7 +167,6 @@ async function start() {
     }
   }
 
-  // Final check for Admin
   if (state.roles.length === 0) {
     const adminRole = { id: randomUUID(), name: 'System Administrator', isSystemAdmin: true };
     state.roles.push(adminRole);

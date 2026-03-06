@@ -46,7 +46,7 @@ try {
   }
 } catch (err) { console.error("❌ Database Init Error", err); }
 
-// --- 3. HELPER FUNCTIONS (Defined at top to fix "Cannot find name" errors) ---
+// --- 3. HELPER FUNCTIONS ---
 
 const nowIso = () => new Date().toISOString();
 
@@ -89,11 +89,6 @@ async function persistRuntimeChanges() {
   } catch (err: any) {
     console.error('❌ [STATE] Persistence failed:', err.message);
   }
-}
-
-function verifyPassword(password: string, hash: string, salt: string) {
-  const derived = scryptSync(password, salt, 64);
-  return timingSafeEqual(derived, Buffer.from(hash, 'hex'));
 }
 
 // --- 4. API ROUTES ---
@@ -164,9 +159,10 @@ async function start() {
     await persistRuntimeChanges();
   }
 
-  const PORT = Number(process.env.PORT || 3001); 
-
+  const PORT = Number(process.env.PORT || 3001);
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`📡 [SWIFT ENGINE] Backend active on port ${PORT}`);
   });
+}
+
 start().catch(err => console.error("❌ Boot Error", err));

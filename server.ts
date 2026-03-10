@@ -17,7 +17,6 @@ type ApiState = {
 };
 
 const STATE_ROW_ID = 'main';
-// Initialize with empty arrays to prevent .map() crashes
 const state: ApiState = {
   partners: [], agents: [], calls: [], orders: [],
   sales: [], users: [], roles: [], workOrders: [],
@@ -61,7 +60,6 @@ function normalizePartner(input: Dict): Dict {
   };
 }
 
-// Ensures every order has an items array so the frontend doesn't crash
 function normalizeOrder(input: Dict): Dict {
   return {
     id: input.id ?? randomUUID(),
@@ -69,6 +67,12 @@ function normalizeOrder(input: Dict): Dict {
     status: input.status ?? 'PENDING',
     orderDate: input.orderDate ?? nowIso(),
     totalValue: Number(input.totalValue ?? 0),
+    adminApproved: Boolean(input.adminApproved ?? false),
+    agentHeadApproved: Boolean(input.agentHeadApproved ?? false),
+    accountOfficerApproved: Boolean(input.accountOfficerApproved ?? false),
+    settlementAdminApproved: Boolean(input.settlementAdminApproved ?? false),
+    settlementAgentHeadApproved: Boolean(input.settlementAgentHeadApproved ?? false),
+    settlementAccountOfficerApproved: Boolean(input.settlementAccountOfficerApproved ?? false),
     ...input
   };
 }
@@ -87,9 +91,14 @@ async function persistRuntimeChanges() {
 
 // --- API ROUTES ---
 const app = express();
-app.use(cors({ origin: '*', credentials: true }));
-app.use(express.json());
 
+// 🚀 FIX: Increase payload limit for images (Fixes 413 error)
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+app.use(cors({ origin: '*', credentials: true }));
+
+// Health Check
 app.get('/api/health', (req, res) => res.json({ status: 'ONLINE', timestamp: nowIso() }));
 
 // Config
@@ -109,9 +118,42 @@ app.post('/api/partners', async (req, res) => {
   res.json(partner);
 });
 
-// Data Routes (Safety: Always return an array)
-app.get('/api/agents', (req, res) => res.json(state.agents || []));
+// Orders & Approvals
 app.get('/api/orders', (req, res) => res.json(state.orders || []));
+app.post('/api/orders', async (req, res) => {
+  const order = normalizeOrder(req.body);
+  state.orders.push(order);
+  await persistRuntimeChanges();
+  res.json(order);
+});
+
+// 🚀 FIX: Added missing approval routes (Fixes 404 error)
+app.post('/api/orders/:id/approve', async (req, res) => {
+  const idx = state.orders.findIndex(o => o.id === req.params.id);
+  if (idx !== -1) {
+    const { type } = req.body;
+    if (type === 'ADMIN') state.orders[idx].adminApproved = true;
+    if (type === 'AGENT_HEAD') state.orders[idx].agentHeadApproved = true;
+    if (type === 'ACCOUNT_OFFICER') state.orders[idx].accountOfficerApproved = true;
+    await persistRuntimeChanges();
+    res.json(state.orders[idx]);
+  } else res.status(404).json({ error: "Order not found" });
+});
+
+app.post('/api/orders/:id/settlement-approve', async (req, res) => {
+  const idx = state.orders.findIndex(o => o.id === req.params.id);
+  if (idx !== -1) {
+    const { type } = req.body;
+    if (type === 'ADMIN') state.orders[idx].settlementAdminApproved = true;
+    if (type === 'AGENT_HEAD') state.orders[idx].settlementAgentHeadApproved = true;
+    if (type === 'ACCOUNT_OFFICER') state.orders[idx].settlementAccountOfficerApproved = true;
+    await persistRuntimeChanges();
+    res.json(state.orders[idx]);
+  } else res.status(404).json({ error: "Order not found" });
+});
+
+// Other Data Routes
+app.get('/api/agents', (req, res) => res.json(state.agents || []));
 app.get('/api/calls', (req, res) => res.json(state.calls || []));
 app.get('/api/sales', (req, res) => res.json(state.sales || []));
 app.get('/api/users', (req, res) => res.json(state.users || []));
@@ -136,7 +178,7 @@ async function hydrateFromPrisma() {
     const [p, a, o, r, u, c, wo, s] = await Promise.all([
       (prisma as any).partner.findMany(),
       (prisma as any).agent.findMany(),
-      (prisma as any).order.findMany({ include: { items: true } }), // CRITICAL: Include items
+      (prisma as any).order.findMany({ include: { items: true } }),
       (prisma as any).role.findMany(),
       (prisma as any).user.findMany(),
       (prisma as any).callReport.findMany(),
@@ -154,7 +196,7 @@ async function hydrateFromPrisma() {
     state.sales = s || [];
     
     await persistRuntimeChanges();
-    console.log(`✅ Hydration Complete: ${state.orders.length} orders loaded with items.`);
+    console.log(`✅ Hydration Complete`);
   } catch (err: any) { console.error("❌ Hydration Error:", err.message); }
 }
 
@@ -165,18 +207,8 @@ async function start() {
     const result = await pgPool.query(`SELECT data FROM swift_runtime_state WHERE id = $1`, [STATE_ROW_ID]);
     
     if (result.rows[0]?.data) {
-      console.log("📦 [STATE] Loading existing state from swift_runtime_state");
-      const savedData = result.rows[0].data;
-      // Merge saved data with defaults to ensure no missing keys
-      state.partners = savedData.partners || [];
-      state.agents = savedData.agents || [];
-      state.orders = (savedData.orders || []).map((o: any) => normalizeOrder(o));
-      state.sales = savedData.sales || [];
-      state.users = savedData.users || [];
-      state.roles = savedData.roles || [];
-      state.workOrders = savedData.workOrders || [];
-      state.calls = savedData.calls || [];
-      if (savedData.config) state.config = savedData.config;
+      console.log("📦 [STATE] Loading existing state");
+      Object.assign(state, result.rows[0].data);
     } else {
       await hydrateFromPrisma();
     }

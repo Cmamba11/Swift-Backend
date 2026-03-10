@@ -91,11 +91,8 @@ async function persistRuntimeChanges() {
 
 // --- API ROUTES ---
 const app = express();
-
-// 🚀 FIX: Increase payload limit for images (Fixes 413 error)
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
-
 app.use(cors({ origin: '*', credentials: true }));
 
 // Health Check
@@ -127,7 +124,6 @@ app.post('/api/orders', async (req, res) => {
   res.json(order);
 });
 
-// 🚀 FIX: Added missing approval routes (Fixes 404 error)
 app.post('/api/orders/:id/approve', async (req, res) => {
   const idx = state.orders.findIndex(o => o.id === req.params.id);
   if (idx !== -1) {
@@ -152,7 +148,49 @@ app.post('/api/orders/:id/settlement-approve', async (req, res) => {
   } else res.status(404).json({ error: "Order not found" });
 });
 
-// Other Data Routes
+// 🚀 FIX: Added Work Order Issue Route (Fixes 404 error)
+app.post('/api/work-orders/issue', async (req, res) => {
+  const { orderId, priority, notes } = req.body;
+  const workOrder = {
+    id: randomUUID(),
+    internalId: `WO-${Math.random().toString(36).slice(2, 7).toUpperCase()}`,
+    orderId,
+    status: 'PENDING',
+    priority: priority || 'NORMAL',
+    startDate: nowIso(),
+    notes: notes || ''
+  };
+  state.workOrders.push(workOrder);
+  
+  // Update order status
+  const orderIdx = state.orders.findIndex(o => o.id === orderId);
+  if (orderIdx !== -1) {
+    state.orders[orderIdx].status = 'AWAITING_PROD';
+  }
+  
+  await persistRuntimeChanges();
+  res.json(workOrder);
+});
+
+app.patch('/api/work-orders/:id/status', async (req, res) => {
+  const idx = state.workOrders.findIndex(wo => wo.id === req.params.id);
+  if (idx !== -1) {
+    const { status } = req.body;
+    state.workOrders[idx].status = status;
+    
+    // Update linked order status
+    const orderIdx = state.orders.findIndex(o => o.id === state.workOrders[idx].orderId);
+    if (orderIdx !== -1) {
+      if (status === 'IN_PROD') state.orders[orderIdx].status = 'IN_PROD';
+      if (status === 'COMPLETED') state.orders[orderIdx].status = 'READY_FOR_DISPATCH';
+    }
+    
+    await persistRuntimeChanges();
+    res.json(state.workOrders[idx]);
+  } else res.status(404).json({ error: "Work order not found" });
+});
+
+// Data Routes
 app.get('/api/agents', (req, res) => res.json(state.agents || []));
 app.get('/api/calls', (req, res) => res.json(state.calls || []));
 app.get('/api/sales', (req, res) => res.json(state.sales || []));
